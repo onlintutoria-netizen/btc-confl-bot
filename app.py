@@ -286,7 +286,8 @@ with tab_live:
         st.write(f"**Close:** ${c1['close']:,.2f} | **VWAP:** ${c1['VWAP']:,.2f}")
         st.write(f"**DMI:** +DI `{c1['PLUS_DI']:.1f}` / -DI `{c1['MINUS_DI']:.1f}` (ADX: `{c1['ADX']:.1f}`)")
         st.markdown(f"- VWAP Position: {'🟢 Above VWAP' if c1_vwap_bull else '🔴 Below VWAP'}")
-        st.markdown(f"- Trend Strength (ADX > 20): {'✅ Active (' + f'{c1[\"ADX\"]:.1f})' if c1_adx_ok else '⚠️ Choppy (' + f'{c1[\"ADX\"]:.1f})'}")
+        adx_val = c1["ADX"]
+        st.markdown(f"- Trend Strength (ADX > 20): {'✅ Active' if c1_adx_ok else '⚠️ Choppy'} (`{adx_val:.1f}`)")
 
     # Execution Chart
     fig = go.Figure()
