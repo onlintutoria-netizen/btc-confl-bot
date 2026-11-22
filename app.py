@@ -234,14 +234,49 @@ def add_indicators(df: pd.DataFrame, timeframe: str = "5m") -> pd.DataFrame:
 
 # --- ALIGN TIMEFRAMES WITHOUT LOOKAHEAD BIAS ---
 def align_timeframes(df_5m: pd.DataFrame, df_30m: pd.DataFrame, df_1h: pd.DataFrame) -> pd.DataFrame:
-    df_30m_closed = df_30m.shift(1).add_suffix("_30m").reset_index()
-    df_1h_closed = df_1h.shift(1).add_suffix("_1h").reset_index()
-    df_base = df_5m.reset_index()
+    if df_5m.empty or df_30m.empty or df_1h.empty:
+        return pd.DataFrame()
 
-    merged = pd.merge_asof(df_base, df_30m_closed, on="timestamp", direction="backward")
-    merged = pd.merge_asof(merged, df_1h_closed, on="timestamp", direction="backward")
+    df_5m_clean = df_5m.copy()
+    df_30m_clean = df_30m.shift(1).add_suffix("_30m")
+    df_1h_clean = df_1h.shift(1).add_suffix("_1h")
+
+    df_5m_clean.index = pd.to_datetime(df_5m_clean.index)
+    df_30m_clean.index = pd.to_datetime(df_30m_clean.index)
+    df_1h_clean.index = pd.to_datetime(df_1h_clean.index)
+
+    merged = pd.merge_asof(
+        df_5m_clean.sort_index().reset_index(),
+        df_30m_clean.sort_index().reset_index(),
+        on="timestamp",
+        direction="backward",
+    )
+    merged = pd.merge_asof(
+        merged.sort_values("timestamp"),
+        df_1h_clean.sort_index().reset_index(),
+        on="timestamp",
+        direction="backward",
+    )
     merged.set_index("timestamp", inplace=True)
-    return merged.dropna()
+
+    # Only drop rows missing critical indicator columns rather than wiping everything
+    required_cols = [
+        "open", "high", "low", "close", "ATR", "WILLR", "TENKAN",
+        "close_30m", "VWAP_30m", "MACD_30m", "MACD_SIGNAL_30m", "PLUS_DI_30m", "MINUS_DI_30m",
+        "close_1h", "VWAP_1h", "ADX_1h", "PLUS_DI_1h", "MINUS_DI_1h",
+    ]
+    existing_cols = [c for c in required_cols if c in merged.columns]
+    return merged.dropna(subset=existing_cols)
+And at the bottom of run_backtest(...), replace the return line with:
+
+Python
+    if not equity_curve:
+        empty_eq = pd.DataFrame(columns=["equity"])
+        empty_eq.index.name = "timestamp"
+        return pd.DataFrame(trades), empty_eq
+
+    eq_df = pd.DataFrame(equity_curve).set_index("timestamp")
+    return pd.DataFrame(trades), eq_df
 
 def is_buy_setup(row: pd.Series, suffix: str = "") -> bool:
     """Return True when one selected candle timeframe satisfies every buy condition."""
