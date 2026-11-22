@@ -28,6 +28,13 @@ account_balance = st.sidebar.number_input("Account Balance ($)", min_value=100, 
 risk_per_trade_pct = st.sidebar.slider("Risk per Trade (%)", min_value=0.5, max_value=5.0, value=1.0, step=0.5)
 fee_pct = st.sidebar.number_input("Exchange Fee per Side (%)", min_value=0.0, max_value=0.5, value=0.05, step=0.01)
 history_limit = st.sidebar.slider("Historical Candles (5m)", min_value=300, max_value=1500, value=1000, step=100)
+selected_timeframes = st.sidebar.multiselect(
+    "Candle Timeframes",
+    ["5m", "30m", "1h"],
+    default=["5m", "30m", "1h"],
+)
+if not selected_timeframes:
+    st.sidebar.warning("Select at least one candle timeframe.")
 
 if st.sidebar.button("🔄 Refresh Live Data", use_container_width=True):
     st.cache_data.clear()
@@ -37,7 +44,7 @@ if st.sidebar.button("🔄 Refresh Live Data", use_container_width=True):
 @st.cache_data(ttl=60)
 def fetch_ohlcv(source: str, timeframe: str = "5m", limit: int = 1000) -> pd.DataFrame:
     tf_seconds = {"5m": 300, "30m": 1800, "1h": 3600}
-    
+
     # 1. Try Delta Exchange Public REST API first if selected
     if "Delta" in source:
         try:
@@ -72,7 +79,7 @@ def fetch_ohlcv(source: str, timeframe: str = "5m", limit: int = 1000) -> pd.Dat
     return df.astype(float)
 
 # --- PURE PANDAS/NUMPY INDICATOR ENGINE (NO EXTERNAL TA LIBS NEEDED) ---
-def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def add_indicators(df: pd.DataFrame, timeframe: str = "5m") -> pd.DataFrame:
     df = df.copy()
     high, low, close, vol = df["high"], df["low"], df["close"], df["volume"]
 
@@ -121,6 +128,108 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["TENKAN"] = (high.rolling(9).max() + low.rolling(9).min()) / 2.0
     df["KIJUN"] = (high.rolling(26).max() + low.rolling(26).min()) / 2.0
 
+    # 6. Buy-signal confirmations (all lookbacks cover the last hour)
+    hourly_window = {"5m": 12, "30m": 2, "1h": 1}.get(timeframe, 12)
+    macd_histogram = df["MACD"] - df["MACD_SIGNAL"]
+    df["MACD_HIST"] = macd_histogram
+
+    hourly_macd_min = macd_histogram.rolling(hourly_window, min_periods=hourly_window).min()
+    negative_macd = macd_histogram.where(macd_histogram < 0)
+    df["MACD_NEG_AVG_1H"] = negative_macd.rolling(hourly_window, min_periods=hourly_window).mean().abs()
+    df["MACD_MIN_1H"] = hourly_macd_min
+
+    df["MACD_NEGATIVE_MIN_CROSS"] = (
+        (macd_histogram.shift(1) < 0)
+        & (macd_histogram > macd_histogram.shift(1))
+        & (macd_histogram.shift(1) <= hourly_macd_min.shift(1))
+    )
+
+    macd_rise = macd_histogram.diff()
+    df["MACD_RISE_ABOVE_AVERAGE"] = (macd_rise > 0) & (macd_rise > df["MACD_NEG_AVG_1H"])
+
+    willr = df["WILLR"]
+    hourly_willr_min = willr.rolling(hourly_window, min_periods=hourly_window).min()
+    negative_willr = willr.where(willr < 0)
+    df["WILLR_NEG_AVG_1H"] = negative_willr.rolling(hourly_window, min_periods=hourly_window).mean().abs()
+    df["WILLR_MIN_1H"] = hourly_willr_min
+
+    df["WILLR_NEGATIVE_MIN_CROSS"] = (
+        (willr.shift(1) < 0)
+        & (willr > willr.shift(1))
+        & (willr.shift(1) <= hourly_willr_min.shift(1))
+    )
+    willr_rise = willr.diff()
+    df["WILLR_RISE_ABOVE_AVERAGE"] = willr_rise > df["WILLR_NEG_AVG_1H"].replace(0, np.nan)
+
+    df["MINUS_TO_PLUS_DI_CROSS"] = (
+        (df["MINUS_DI"].shift(1) > df["PLUS_DI"].shift(1))
+        & (df["PLUS_DI"] > df["MINUS_DI"])
+        & (df["PLUS_DI"] > df["PLUS_DI"].shift(1))
+        & (df["MINUS_DI"] < df["MINUS_DI"].shift(1))
+    )
+
+    df["GREEN_CANDLE"] = df["close"] > df["open"]
+    df["VWAP_CROSS_UP"] = (df["close"] > df["VWAP"]) & (df["close"].shift(1) <= df["VWAP"].shift(1))
+    df["RED_CANDLE"] = df["close"] < df["open"]
+    df["VWAP_CROSS_DOWN"] = (df["close"] < df["VWAP"]) & (df["close"].shift(1) >= df["VWAP"].shift(1))
+
+    macd_positive = macd_histogram.where(macd_histogram > 0)
+    macd_max_30 = macd_histogram.rolling(30, min_periods=30).max()
+    df["MACD_POS_MAX_30"] = macd_max_30
+    df["MACD_POS_AVG_MAX_30"] = macd_positive.rolling(30, min_periods=30).mean().abs()
+    macd_decrease = macd_histogram.shift(1) - macd_histogram
+    df["MACD_POSITIVE_MAX_CROSS"] = (
+        (macd_histogram.shift(1) > 0)
+        & (macd_histogram < macd_histogram.shift(1))
+        & (macd_histogram.shift(1) >= macd_max_30.shift(1))
+    )
+    df["MACD_DECREASE_ABOVE_AVERAGE"] = (macd_decrease > 0) & (
+        macd_decrease > df["MACD_POS_AVG_MAX_30"]
+    )
+
+    willr_positive = willr.where(willr > -20)
+    willr_max_30 = willr.rolling(30, min_periods=30).max()
+    df["WILLR_POS_MAX_30"] = willr_max_30
+    df["WILLR_POS_AVG_MAX_30"] = willr_positive.rolling(30, min_periods=30).mean().abs()
+    willr_decrease = willr.shift(1) - willr
+    df["WILLR_POSITIVE_MAX_CROSS"] = (
+        (willr.shift(1) > -20)
+        & (willr < willr.shift(1))
+        & (willr.shift(1) >= willr_max_30.shift(1))
+    )
+    df["WILLR_DECREASE_ABOVE_AVERAGE"] = (willr_decrease > 0) & (
+        willr_decrease > df["WILLR_POS_AVG_MAX_30"]
+    )
+
+    df["PLUS_TO_MINUS_DI_CROSS"] = (
+        (df["PLUS_DI"].shift(1) > df["MINUS_DI"].shift(1))
+        & (df["MINUS_DI"] > df["PLUS_DI"])
+        & (df["PLUS_DI"] < df["PLUS_DI"].shift(1))
+        & (df["MINUS_DI"] > df["MINUS_DI"].shift(1))
+    )
+
+    df["MACD_BULLISH_DIVERGENCE"] = (
+        (df["low"] < df["low"].shift(3))
+        & (df["MACD_HIST"] > df["MACD_HIST"].shift(3))
+        & (df["MACD_HIST"] > df["MACD_HIST"].rolling(3, min_periods=3).min().shift(1))
+    )
+    df["WILLR_BULLISH_DIVERGENCE"] = (
+        (df["low"] < df["low"].shift(3))
+        & (df["WILLR"] > df["WILLR"].shift(3))
+        & (df["WILLR"] > df["WILLR"].rolling(3, min_periods=3).min().shift(1))
+    )
+    df["LAST_3_CANDLES_DIVERGENCE"] = (
+        df["MACD_BULLISH_DIVERGENCE"] & df["WILLR_BULLISH_DIVERGENCE"]
+    )
+
+    close_range_3 = df["close"].rolling(3, min_periods=3).max() - df["close"].rolling(3, min_periods=3).min()
+    crossover_close_range = close_range_3.shift(3)
+    df["LAST_3_CANDLES_CONVERGENCE"] = (
+        close_range_3 < crossover_close_range
+    ) & (
+        df["close"].notna() & df["close"].shift(1).notna() & df["close"].shift(2).notna()
+    )
+
     return df
 
 # --- ALIGN TIMEFRAMES WITHOUT LOOKAHEAD BIAS ---
@@ -133,6 +242,28 @@ def align_timeframes(df_5m: pd.DataFrame, df_30m: pd.DataFrame, df_1h: pd.DataFr
     merged = pd.merge_asof(merged, df_1h_closed, on="timestamp", direction="backward")
     merged.set_index("timestamp", inplace=True)
     return merged.dropna()
+
+def is_buy_setup(row: pd.Series, suffix: str = "") -> bool:
+    """Return True when one selected candle timeframe satisfies every buy condition."""
+    return (
+        bool(row[f"MACD_NEGATIVE_MIN_CROSS{suffix}"] and row[f"MACD_RISE_ABOVE_AVERAGE{suffix}"])
+        and bool(row[f"WILLR_NEGATIVE_MIN_CROSS{suffix}"] and row[f"WILLR_RISE_ABOVE_AVERAGE{suffix}"])
+        and bool(row[f"MINUS_TO_PLUS_DI_CROSS{suffix}"])
+        and bool(row[f"GREEN_CANDLE{suffix}"])
+        and bool(row[f"VWAP_CROSS_UP{suffix}"])
+        and bool(row[f"LAST_3_CANDLES_DIVERGENCE{suffix}"])
+    )
+
+def is_sell_setup(row: pd.Series, suffix: str = "") -> bool:
+    """Return True when one selected candle timeframe satisfies every sell condition."""
+    return (
+        bool(row[f"MACD_POSITIVE_MAX_CROSS{suffix}"] and row[f"MACD_DECREASE_ABOVE_AVERAGE{suffix}"])
+        and bool(row[f"WILLR_POSITIVE_MAX_CROSS{suffix}"] and row[f"WILLR_DECREASE_ABOVE_AVERAGE{suffix}"])
+        and bool(row[f"PLUS_TO_MINUS_DI_CROSS{suffix}"])
+        and bool(row[f"RED_CANDLE{suffix}"])
+        and bool(row[f"VWAP_CROSS_DOWN{suffix}"])
+        and bool(row[f"LAST_3_CANDLES_CONVERGENCE{suffix}"])
+    )
 
 # --- BACKTESTING ENGINE ---
 def run_backtest(merged_df: pd.DataFrame, capital: float, risk_pct: float, fee_rate: float):
@@ -172,19 +303,27 @@ def run_backtest(merged_df: pd.DataFrame, capital: float, risk_pct: float, fee_r
                     position = None
 
         if position is None:
-            bull_1h = (row["close_1h"] > row["VWAP_1h"]) and (row["ADX_1h"] > 20) and (row["PLUS_DI_1h"] > row["MINUS_DI_1h"])
-            bear_1h = (row["close_1h"] < row["VWAP_1h"]) and (row["ADX_1h"] > 20) and (row["MINUS_DI_1h"] > row["PLUS_DI_1h"])
-
-            bull_30m = (row["MACD_30m"] > row["MACD_SIGNAL_30m"]) and (row["PLUS_DI_30m"] > row["MINUS_DI_30m"])
-            bear_30m = (row["MACD_30m"] < row["MACD_SIGNAL_30m"]) and (row["MINUS_DI_30m"] > row["PLUS_DI_30m"])
-
-            bull_5m = (row["WILLR"] < -75) and (row["close"] > row["TENKAN"])
-            bear_5m = (row["WILLR"] > -25) and (row["close"] < row["TENKAN"])
+            timeframe_setups = {
+                "5m": is_buy_setup(row),
+                "30m": is_buy_setup(row, "_30m"),
+                "1h": is_buy_setup(row, "_1h"),
+            }
+            sell_timeframe_setups = {
+                "5m": is_sell_setup(row),
+                "30m": is_sell_setup(row, "_30m"),
+                "1h": is_sell_setup(row, "_1h"),
+            }
+            bull_selected = bool(selected_timeframes) and all(
+                timeframe_setups[timeframe] for timeframe in selected_timeframes
+            )
+            sell_selected = bool(selected_timeframes) and all(
+                sell_timeframe_setups[timeframe] for timeframe in selected_timeframes
+            )
 
             atr = row["ATR"]
             entry_price = row["close"]
 
-            if bull_1h and bull_30m and bull_5m and atr > 0:
+            if bull_selected and atr > 0:
                 sl = entry_price - (1.5 * atr)
                 tp = entry_price + (3.0 * atr)
                 risk_amount = equity * (risk_pct / 100.0)
@@ -192,7 +331,7 @@ def run_backtest(merged_df: pd.DataFrame, capital: float, risk_pct: float, fee_r
                 equity -= entry_price * size * fee_rate
                 position = {"side": "LONG", "entry_time": ts, "entry": entry_price, "sl": sl, "tp": tp, "size": size}
 
-            elif bear_1h and bear_30m and bear_5m and atr > 0:
+            elif sell_selected and atr > 0:
                 sl = entry_price + (1.5 * atr)
                 tp = entry_price - (3.0 * atr)
                 risk_amount = equity * (risk_pct / 100.0)
@@ -206,9 +345,9 @@ def run_backtest(merged_df: pd.DataFrame, capital: float, risk_pct: float, fee_r
 
 # --- LOAD & PROCESS DATA ---
 with st.spinner("Fetching multi-timeframe data..."):
-    df_5m = add_indicators(fetch_ohlcv(data_source, "5m", limit=history_limit))
-    df_30m = add_indicators(fetch_ohlcv(data_source, "30m", limit=max(200, history_limit // 5)))
-    df_1h = add_indicators(fetch_ohlcv(data_source, "1h", limit=max(200, history_limit // 10)))
+    df_5m = add_indicators(fetch_ohlcv(data_source, "5m", limit=history_limit), "5m")
+    df_30m = add_indicators(fetch_ohlcv(data_source, "30m", limit=max(200, history_limit // 5)), "30m")
+    df_1h = add_indicators(fetch_ohlcv(data_source, "1h", limit=max(200, history_limit // 10)), "1h")
 
 # --- MAIN NAVIGATION TABS ---
 tab_live, tab_backtest, tab_guide = st.tabs([
@@ -233,22 +372,42 @@ with tab_live:
 
     c5_willr_bull, c5_willr_bear = c5["WILLR"] < -75, c5["WILLR"] > -25
     c5_tenkan_bull, c5_tenkan_bear = c5["close"] > c5["TENKAN"], c5["close"] < c5["TENKAN"]
+    timeframe_setups = {
+        "5m": is_buy_setup(c5),
+        "30m": is_buy_setup(c30),
+        "1h": is_buy_setup(c1),
+    }
+    sell_timeframe_setups = {
+        "5m": is_sell_setup(c5),
+        "30m": is_sell_setup(c30),
+        "1h": is_sell_setup(c1),
+    }
+    buy_macd_min_cross = bool(c5["MACD_NEGATIVE_MIN_CROSS"] and c5["MACD_RISE_ABOVE_AVERAGE"])
+    buy_willr_min_cross = bool(c5["WILLR_NEGATIVE_MIN_CROSS"] and c5["WILLR_RISE_ABOVE_AVERAGE"])
+    buy_dmi_cross = bool(c5["MINUS_TO_PLUS_DI_CROSS"])
+    buy_green_vwap = bool(c5["GREEN_CANDLE"] and c5["VWAP_CROSS_UP"])
+    buy_last_3_divergence = bool(c5["LAST_3_CANDLES_DIVERGENCE"])
+    sell_macd_max_cross = bool(c5["MACD_POSITIVE_MAX_CROSS"] and c5["MACD_DECREASE_ABOVE_AVERAGE"])
+    sell_willr_max_cross = bool(c5["WILLR_POSITIVE_MAX_CROSS"] and c5["WILLR_DECREASE_ABOVE_AVERAGE"])
+    sell_dmi_cross = bool(c5["PLUS_TO_MINUS_DI_CROSS"])
+    sell_red_vwap = bool(c5["RED_CANDLE"] and c5["VWAP_CROSS_DOWN"])
+    sell_last_3_convergence = bool(c5["LAST_3_CANDLES_CONVERGENCE"])
 
-    bull_1h = c1_vwap_bull and c1_adx_ok and c1_dmi_bull
-    bear_1h = c1_vwap_bear and c1_adx_ok and c1_dmi_bear
-    bull_30m = c30_macd_bull and c30_dmi_bull
-    bear_30m = c30_macd_bear and c30_dmi_bear
-    bull_5m = c5_willr_bull and c5_tenkan_bull
-    bear_5m = c5_willr_bear and c5_tenkan_bear
+    bull_selected = bool(selected_timeframes) and all(
+        timeframe_setups[timeframe] for timeframe in selected_timeframes
+    )
+    sell_selected = bool(selected_timeframes) and all(
+        sell_timeframe_setups[timeframe] for timeframe in selected_timeframes
+    )
 
     price, atr = c5["close"], c5["ATR"]
     risk_usd = account_balance * (risk_per_trade_pct / 100.0)
 
-    if bull_1h and bull_30m and bull_5m:
+    if bull_selected:
         signal, color = "STRONG BUY (LONG)", "green"
         sl, tp = price - (1.5 * atr), price + (3.0 * atr)
         pos_btc = risk_usd / abs(price - sl)
-    elif bear_1h and bear_30m and bear_5m:
+    elif sell_selected:
         signal, color = "STRONG SELL (SHORT)", "red"
         sl, tp = price + (1.5 * atr), price - (3.0 * atr)
         pos_btc = risk_usd / abs(sl - price)
@@ -263,6 +422,12 @@ with tab_live:
     col4.metric("Take Profit (3.0x ATR)", f"${tp:,.2f}" if tp else "—")
     col5.metric("Position Size (Delta Lots)", f"{int(pos_btc * 1000)} Lots ({pos_btc:.3f} BTC)" if pos_btc else "—")
 
+    selected_status = " | ".join(
+        f"{timeframe}: {'BUY' if timeframe_setups[timeframe] else ('SELL' if sell_timeframe_setups[timeframe] else 'WAIT')}"
+        for timeframe in selected_timeframes
+    )
+    st.markdown(f"**Selected timeframe status:** {selected_status}" if selected_status else "**Select at least one timeframe in the sidebar.**")
+
     st.divider()
 
     # 3-Pane Breakdown with Live Checklists
@@ -271,8 +436,17 @@ with tab_live:
         st.subheader("Left Pane: 5m (Execution)")
         st.write(f"**Close:** ${c5['close']:,.2f} | **Tenkan:** ${c5['TENKAN']:,.2f}")
         st.write(f"**Williams %R:** `{c5['WILLR']:.2f}` | **ATR:** `${c5['ATR']:.2f}`")
-        st.markdown(f"- Williams %R Trigger: {'🟢 Oversold (< -75)' if c5_willr_bull else ('🔴 Overbought (> -25)' if c5_willr_bear else '⚪ Neutral (-25 to -75)')}")
-        st.markdown(f"- Ichimoku Tenkan Cross: {'🟢 Above Tenkan' if c5_tenkan_bull else '🔴 Below Tenkan'}")
+        st.write(f"**DMI:** +DI `{c5['PLUS_DI']:.1f}` / -DI `{c5['MINUS_DI']:.1f}`")
+        st.markdown(f"- MACD negative-minimum cross: {'🟢' if buy_macd_min_cross else '⚪'}")
+        st.markdown(f"- Williams %R negative-minimum cross: {'🟢' if buy_willr_min_cross else '⚪'}")
+        st.markdown(f"- -DI / +DI divergence cross: {'🟢' if buy_dmi_cross else '⚪'}")
+        st.markdown(f"- Green candle / VWAP cross: {'🟢' if buy_green_vwap else '⚪'}")
+        st.markdown(f"- 3-candle bullish divergence: {'🟢' if buy_last_3_divergence else '⚪'}")
+        st.markdown(f"- MACD positive-maximum cross: {'🔴' if sell_macd_max_cross else '⚪'}")
+        st.markdown(f"- Williams %R positive-maximum cross: {'🔴' if sell_willr_max_cross else '⚪'}")
+        st.markdown(f"- +DI / -DI divergence cross: {'🔴' if sell_dmi_cross else '⚪'}")
+        st.markdown(f"- Red candle / VWAP cross: {'🔴' if sell_red_vwap else '⚪'}")
+        st.markdown(f"- 3-candle close convergence: {'🔴' if sell_last_3_convergence else '⚪'}")
 
     with p2:
         st.subheader("Middle Pane: 30m (Intraday)")
@@ -347,12 +521,12 @@ with tab_backtest:
 with tab_guide:
     st.subheader("📋 Signal Decision Matrix")
     st.markdown("""
-    Only execute a trade when **all three timeframes** align. If even one filter disagrees, stay flat.
+    Execute only when **every selected timeframe** shows the complete BUY or SELL setup. If even one selected timeframe disagrees, stay flat.
 
     | Signal | 1H Macro Bias (Filter) | 30M Intraday (Confirmation) | 5M Execution (Trigger) |
     | :--- | :--- | :--- | :--- |
-    | **🟢 STRONG BUY (LONG)** | • Price **above** VWAP<br>• **+DI > -DI**<br>• **ADX > 20** | • **MACD > Signal** line<br>• **+DI > -DI** | • **Williams %R < -75** (oversold pullback)<br>• Price closes **above** Ichimoku Tenkan |
-    | **🔴 STRONG SELL (SHORT)** | • Price **below** VWAP<br>• **-DI > +DI**<br>• **ADX > 20** | • **MACD < Signal** line<br>• **-DI > +DI** | • **Williams %R > -25** (overbought rally)<br>• Price closes **below** Ichimoku Tenkan |
+    | **🟢 STRONG BUY (LONG)** | • Price **above** VWAP<br>• **+DI > -DI**<br>• **ADX > 20** | • **MACD > Signal** line<br>• **+DI > -DI** | • MACD reaches a negative minimum and crosses upward, increasing above its 1-hour average negative minimum<br>• Williams %R reaches a negative minimum and crosses upward, increasing above its 1-hour average minimum<br>• **-DI crosses below +DI** with both DMI values diverging<br>• Current 5m candle is green and crosses above VWAP<br>• The last three candles show bullish divergence versus the crossover |
+    | **🔴 STRONG SELL (SHORT)** | • Price **below** VWAP<br>• **-DI > +DI**<br>• **ADX > 20** | • **MACD < Signal** line<br>• **-DI > +DI** | • MACD reaches a positive maximum and crosses downward, decreasing below its 30-candle average maximum<br>• Williams %R reaches a positive maximum and crosses downward, decreasing below its 30-candle average maximum<br>• **+DI crosses below -DI** with both DMI values diverging<br>• Current candle is red and crosses below VWAP<br>• The last three closed values converge versus the crossover value |
     | **🟠 WAIT (NO TRADE)** | • Price chopping around VWAP<br>• **ADX < 20** (sideways chop) | • MACD & DMI conflict with 1H trend | • Williams %R between `-25` and `-75`<br>• No Tenkan crossover |
     """)
 
