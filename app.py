@@ -38,7 +38,7 @@ if st.sidebar.button("🔄 Refresh Live Data", use_container_width=True):
     st.rerun()
 
 # --- MULTI-SOURCE CLOUD-SAFE DATA FETCHER ---
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=20)
 def fetch_ohlcv(source: str, timeframe: str = "5m", limit: int = 1000) -> pd.DataFrame:
     tf_seconds = {"5m": 300, "30m": 1800, "1h": 3600}
 
