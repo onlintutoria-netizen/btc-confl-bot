@@ -35,7 +35,63 @@ history_limit = st.sidebar.slider("Historical Candles (5m)", min_value=300, max_
 if st.sidebar.button("🔄 Refresh Live Data", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
+# --- CUSTOM TIMEFRAME CONFIGURATION & RESAMPLER ---
+CUSTOM_INTERVALS = {
+    "30 sec":   {"base_tf": "1m",  "rule": "30s",  "days_back": 1},
+    "1 min":    {"base_tf": "1m",  "rule": None,   "days_back": 1},
+    "3 mins":   {"base_tf": "1m",  "rule": "3min", "days_back": 2},
+    "5 mins":   {"base_tf": "5m",  "rule": None,   "days_back": 4},
+    "10 mins":  {"base_tf": "5m",  "rule": "10min","days_back": 7},
+    "15 mins":  {"base_tf": "15m", "rule": None,   "days_back": 10},
+    "30 mins":  {"base_tf": "30m", "rule": None,   "days_back": 15},
+    "1 hr":     {"base_tf": "1h",  "rule": None,   "days_back": 30},
+    "2 hrs":    {"base_tf": "1h",  "rule": "2h",   "days_back": 60},
+    "3 hrs":    {"base_tf": "1h",  "rule": "3h",   "days_back": 90},
+    "4 hrs":    {"base_tf": "4h",  "rule": None,   "days_back": 120},
+    "1 day":    {"base_tf": "1d",  "rule": None,   "days_back": 365},
+    "2 days":   {"base_tf": "1d",  "rule": "2D",   "days_back": 730},
+    "3 days":   {"base_tf": "1d",  "rule": "3D",   "days_back": 1000},
+    "5 days":   {"base_tf": "1d",  "rule": "5D",   "days_back": 1500},
+    "10 days":  {"base_tf": "1d",  "rule": "10D",  "days_back": 2000},
+    "1 month":  {"base_tf": "1d",  "rule": "1ME",  "days_back": 2500},
+    "2 months": {"base_tf": "1d",  "rule": "2ME",  "days_back": 3000},
+    "3 months": {"base_tf": "1d",  "rule": "3ME",  "days_back": 3650},
+}
 
+def fetch_custom_interval(source: str, label: str) -> pd.DataFrame:
+    cfg = CUSTOM_INTERVALS[label]
+    base_tf = cfg["base_tf"]
+    rule = cfg["rule"]
+
+    # Special handling for 30 sec using recent exchange trades (via CCXT)
+    if label == "30 sec":
+        try:
+            ex_id = "coinbase" if "Coinbase" in source else "kraken"
+            ex = getattr(ccxt, ex_id)()
+            trades = ex.fetch_trades("BTC/USD", limit=1000)
+            t_df = pd.DataFrame(trades)[["timestamp", "price", "amount"]]
+            t_df["timestamp"] = pd.to_datetime(t_df["timestamp"], unit="ms")
+            t_df.set_index("timestamp", inplace=True)
+            ohlc = t_df["price"].resample("30s").ohlc()
+            vol = t_df["amount"].resample("30s").sum().rename("volume")
+            df_30s = pd.concat([ohlc, vol], axis=1).dropna()
+            if len(df_30s) >= 20:
+                return add_indicators(df_30s)
+        except Exception:
+            pass  # Falls back to 1m if trade history is too short
+
+    # Update tf_seconds in fetch_ohlcv to support 1m, 15m, 4h, 1d
+    df = fetch_ohlcv(source, base_tf, limit=1000)
+    if rule and not df.empty:
+        df = df.resample(rule).agg({
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum"
+        }).dropna()
+
+    return add_indicators(df)
 # --- MULTI-SOURCE CLOUD-SAFE DATA FETCHER ---
 @st.cache_data(ttl=20)
 def fetch_ohlcv(source: str, timeframe: str = "5m", limit: int = 1000) -> pd.DataFrame:
