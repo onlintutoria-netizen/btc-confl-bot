@@ -354,6 +354,40 @@ with tab_live:
     col5.metric("Position Size (Delta Lots)", f"{int(pos_btc * 1000)} Lots ({pos_btc:.3f} BTC)" if pos_btc else "—")
 
     st.divider()
+st.subheader("⏱️ Multi-Interval Technical Matrix (Williams %R, DMI/ADX, MACD)")
+
+selected_intervals = st.multiselect(
+    "Choose Time Intervals to Analyze",
+    options=list(CUSTOM_INTERVALS.keys()),
+    default=["1 min", "5 mins", "15 mins", "1 hr", "4 hrs", "1 day", "1 month"]
+)
+
+if selected_intervals:
+    matrix_rows = []
+    for tf_label in selected_intervals:
+        tf_df = fetch_custom_interval(data_source, tf_label)
+        if tf_df.empty:
+            continue
+        last = tf_df.iloc[-1]
+
+        willr = last["WILLR"]
+        willr_state = "🟢 Oversold" if willr < -75 else ("🔴 Overbought" if willr > -25 else "⚪ Neutral")
+        dmi_state = "🟢 +DI > -DI" if last["PLUS_DI"] > last["MINUS_DI"] else "🔴 -DI > +DI"
+        macd_state = "🟢 Bullish" if last["MACD"] > last["MACD_SIGNAL"] else "🔴 Bearish"
+
+        matrix_rows.append({
+            "Interval": tf_label,
+            "Close ($)": f"${last['close']:,.2f}",
+            "Williams %R": f"{willr:.2f} ({willr_state})",
+            "+DI": f"{last['PLUS_DI']:.1f}",
+            "-DI": f"{last['MINUS_DI']:.1f}",
+            "ADX": f"{last['ADX']:.1f} ({dmi_state})",
+            "MACD": f"{last['MACD']:.1f}",
+            "MACD Signal": f"{last['MACD_SIGNAL']:.1f} ({macd_state})",
+        })
+
+    if matrix_rows:
+        st.dataframe(pd.DataFrame(matrix_rows), use_container_width=True, hide_index=True)
 
     p1, p2, p3 = st.columns(3)
     with p1:
