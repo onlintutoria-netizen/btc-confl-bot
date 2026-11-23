@@ -452,7 +452,7 @@ with tab_live:
 
     with chart_tabs[5]:
         df_1d = add_indicators(fetch_ohlcv(data_source, "1d", limit=300))
-        render_indicator_chart(df_1d, "1d"))
+        render_indicator_chart(df_1d, "1d")
 
 selected_intervals = st.multiselect(
     "Choose Time Intervals to Analyze",
