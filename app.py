@@ -95,7 +95,7 @@ def fetch_custom_interval(source: str, label: str) -> pd.DataFrame:
 # --- MULTI-SOURCE CLOUD-SAFE DATA FETCHER ---
 @st.cache_data(ttl=20)
 def fetch_ohlcv(source: str, timeframe: str = "5m", limit: int = 1000) -> pd.DataFrame:
-    tf_seconds = {"5m": 300, "30m": 1800, "1h": 3600}
+    tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
 
     # 1. Try Delta Exchange Public REST API first if selected
     if "Delta" in source:
