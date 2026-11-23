@@ -186,7 +186,81 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["KIJUN"] = (high.rolling(26).max() + low.rolling(26).min()) / 2.0
 
     return df
+# --- REUSABLE 3-PANEL CHART BUILDER (PRICE + WILLIAMS %R + DMI/ADX) ---
+def render_indicator_chart(df: pd.DataFrame, label: str, num_candles: int = 80):
+    if df.empty:
+        st.warning(f"No data available for {label} chart.")
+        return
 
+    plot_df = df.iloc[-num_candles:]
+
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        row_heights=[0.52, 0.24, 0.24],
+        subplot_titles=(
+            f"{label} Chart (Price, VWAP & Tenkan)",
+            "Williams %R (14)",
+            "DMI (+DI / -DI) & ADX (14)"
+        )
+    )
+
+    # --- ROW 1: CANDLESTICKS + VWAP + TENKAN ---
+    fig.add_trace(
+        go.Candlestick(
+            x=plot_df.index,
+            open=plot_df["open"],
+            high=plot_df["high"],
+            low=plot_df["low"],
+            close=plot_df["close"],
+            name=f"BTC {label}"
+        ),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["VWAP"], line=dict(color="cyan", width=1.5), name="VWAP"),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["TENKAN"], line=dict(color="orange", width=1.2), name="Ichimoku Tenkan"),
+        row=1, col=1
+    )
+
+    # --- ROW 2: WILLIAMS %R ---
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["WILLR"], line=dict(color="#bb86fc", width=1.6), name="Williams %R"),
+        row=2, col=1
+    )
+    fig.add_hline(y=-25, line_dash="dash", line_color="red", line_width=1, row=2, col=1)
+    fig.add_hline(y=-75, line_dash="dash", line_color="green", line_width=1, row=2, col=1)
+    fig.update_yaxes(range=[-105, 5], title_text="Will %R", row=2, col=1)
+
+    # --- ROW 3: +DI, -DI, ADX ---
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["PLUS_DI"], line=dict(color="#00e676", width=1.5), name="+DI"),
+        row=3, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["MINUS_DI"], line=dict(color="#ff5252", width=1.5), name="-DI"),
+        row=3, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["ADX"], line=dict(color="#ffd740", width=1.8), name="ADX"),
+        row=3, col=1
+    )
+    fig.add_hline(y=20, line_dash="dash", line_color="gray", line_width=1, row=3, col=1)
+    fig.update_yaxes(title_text="DMI / ADX", row=3, col=1)
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=720,
+        xaxis_rangeslider_visible=False,
+        margin=dict(t=40, b=20, l=40, r=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    st.plotly_chart(fig, use_container_width=True, key=f"chart_{label}")
 # --- ALIGN TIMEFRAMES WITHOUT LOOKAHEAD BIAS ---
 def align_timeframes(df_5m: pd.DataFrame, df_30m: pd.DataFrame, df_1h: pd.DataFrame) -> pd.DataFrame:
     if df_5m.empty or df_30m.empty or df_1h.empty:
@@ -355,7 +429,30 @@ with tab_live:
     col5.metric("Position Size (Delta Lots)", f"{int(pos_btc * 1000)} Lots ({pos_btc:.3f} BTC)" if pos_btc else "—")
 
     st.divider()
-st.subheader("⏱️ Multi-Interval Technical Matrix (Williams %R, DMI/ADX, MACD)")
+    st.subheader("📈 Multi-Timeframe Technical Charts (Price, Williams %R & DMI/ADX)")
+
+    chart_tabs = st.tabs(["5 Minutes", "15 Minutes", "30 Minutes", "1 Hour", "4 Hours", "1 Day"])
+
+    with chart_tabs[0]:
+        render_indicator_chart(df_5m, "5m")
+
+    with chart_tabs[1]:
+        df_15m = add_indicators(fetch_ohlcv(data_source, "15m", limit=300))
+        render_indicator_chart(df_15m, "15m")
+
+    with chart_tabs[2]:
+        render_indicator_chart(df_30m, "30m")
+
+    with chart_tabs[3]:
+        render_indicator_chart(df_1h, "1h")
+
+    with chart_tabs[4]:
+        df_4h = add_indicators(fetch_ohlcv(data_source, "4h", limit=300))
+        render_indicator_chart(df_4h, "4h")
+
+    with chart_tabs[5]:
+        df_1d = add_indicators(fetch_ohlcv(data_source, "1d", limit=300))
+        render_indicator_chart(df_1d, "1d"))
 
 selected_intervals = st.multiselect(
     "Choose Time Intervals to Analyze",
