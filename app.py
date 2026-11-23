@@ -412,16 +412,75 @@ if selected_intervals:
         adx_val = c1["ADX"]
         st.markdown(f"- Trend Strength (ADX > 20): {'✅ Active' if c1_adx_ok else '⚠️ Choppy'} (`{adx_val:.1f}`)")
 
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(
-        x=df_5m.index[-80:], open=df_5m["open"][-80:], high=df_5m["high"][-80:],
-        low=df_5m["low"][-80:], close=df_5m["close"][-80:], name="BTC 5m"
-    ))
-    fig.add_trace(go.Scatter(x=df_5m.index[-80:], y=df_5m["VWAP"][-80:], line=dict(color="cyan", width=1.5), name="VWAP"))
-    fig.add_trace(go.Scatter(x=df_5m.index[-80:], y=df_5m["TENKAN"][-80:], line=dict(color="orange", width=1.2), name="Ichimoku Tenkan"))
-    fig.update_layout(template="plotly_dark", height=420, xaxis_rangeslider_visible=False, title="5-Minute Execution Chart")
-    st.plotly_chart(fig, use_container_width=True)
+    plot_df = df_5m.iloc[-80:]
 
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        row_heights=[0.52, 0.24, 0.24],
+        subplot_titles=(
+            "5-Minute Execution Chart (Price, VWAP & Tenkan)",
+            "Williams %R (14)",
+            "DMI (+DI / -DI) & ADX (14)"
+        )
+    )
+
+    # --- ROW 1: CANDLESTICKS + VWAP + TENKAN ---
+    fig.add_trace(
+        go.Candlestick(
+            x=plot_df.index,
+            open=plot_df["open"],
+            high=plot_df["high"],
+            low=plot_df["low"],
+            close=plot_df["close"],
+            name="BTC 5m"
+        ),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["VWAP"], line=dict(color="cyan", width=1.5), name="VWAP"),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["TENKAN"], line=dict(color="orange", width=1.2), name="Ichimoku Tenkan"),
+        row=1, col=1
+    )
+
+    # --- ROW 2: WILLIAMS %R ---
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["WILLR"], line=dict(color="#bb86fc", width=1.6), name="Williams %R"),
+        row=2, col=1
+    )
+    fig.add_hline(y=-25, line_dash="dash", line_color="red", line_width=1, row=2, col=1)
+    fig.add_hline(y=-75, line_dash="dash", line_color="green", line_width=1, row=2, col=1)
+    fig.update_yaxes(range=[-105, 5], title_text="Will %R", row=2, col=1)
+
+    # --- ROW 3: +DI, -DI, ADX ---
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["PLUS_DI"], line=dict(color="#00e676", width=1.5), name="+DI"),
+        row=3, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["MINUS_DI"], line=dict(color="#ff5252", width=1.5), name="-DI"),
+        row=3, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["ADX"], line=dict(color="#ffd740", width=1.8), name="ADX"),
+        row=3, col=1
+    )
+    fig.add_hline(y=20, line_dash="dash", line_color="gray", line_width=1, row=3, col=1)
+    fig.update_yaxes(title_text="DMI / ADX", row=3, col=1)
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=760,
+        xaxis_rangeslider_visible=False,
+        margin=dict(t=40, b=20, l=40, r=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    st.plotly_chart(fig, use_container_width=True)
 # ==========================================
 # TAB 2: HISTORICAL BACKTEST
 # ==========================================
