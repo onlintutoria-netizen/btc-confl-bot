@@ -13,7 +13,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
+# Refresh every 30,000 ms (30 seconds)
+count = st_autorefresh(interval=30000, limit=None, key="btcusd_30s_refresh")
 st.title("⚡ BTCUSD Multi-Timeframe Strategy & Backtester")
 st.caption("1H Macro • 30M Intraday • 5M Execution | VWAP, Ichimoku, DMI/ADX, Williams %R & MACD")
 
