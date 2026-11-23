@@ -186,6 +186,84 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["KIJUN"] = (high.rolling(26).max() + low.rolling(26).min()) / 2.0
 
     return df
+
+# --- ALIGN TIMEFRAMES WITHOUT LOOKAHEAD BIAS ---
+# --- REUSABLE 3-PANEL CHART BUILDER (PRICE + WILLIAMS %R + DMI/ADX) ---
+def render_indicator_chart(df: pd.DataFrame, label: str, num_candles: int = 80):
+    if df.empty:
+        st.warning(f"No data available for {label} chart.")
+        return
+
+    plot_df = df.iloc[-num_candles:]
+
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        row_heights=[0.52, 0.24, 0.24],
+        subplot_titles=(
+            f"{label} Chart (Price, VWAP & Tenkan)",
+            "Williams %R (14)",
+            "DMI (+DI / -DI) & ADX (14)"
+        )
+    )
+
+    # --- ROW 1: CANDLESTICKS + VWAP + TENKAN ---
+    fig.add_trace(
+        go.Candlestick(
+            x=plot_df.index,
+            open=plot_df["open"],
+            high=plot_df["high"],
+            low=plot_df["low"],
+            close=plot_df["close"],
+            name=f"BTC {label}"
+        ),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["VWAP"], line=dict(color="cyan", width=1.5), name="VWAP"),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["TENKAN"], line=dict(color="orange", width=1.2), name="Ichimoku Tenkan"),
+        row=1, col=1
+    )
+
+    # --- ROW 2: WILLIAMS %R ---
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["WILLR"], line=dict(color="#bb86fc", width=1.6), name="Williams %R"),
+        row=2, col=1
+    )
+    fig.add_hline(y=-25, line_dash="dash", line_color="red", line_width=1, row=2, col=1)
+    fig.add_hline(y=-75, line_dash="dash", line_color="green", line_width=1, row=2, col=1)
+    fig.update_yaxes(range=[-105, 5], title_text="Will %R", row=2, col=1)
+
+    # --- ROW 3: +DI, -DI, ADX ---
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["PLUS_DI"], line=dict(color="#00e676", width=1.5), name="+DI"),
+        row=3, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["MINUS_DI"], line=dict(color="#ff5252", width=1.5), name="-DI"),
+        row=3, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=plot_df.index, y=plot_df["ADX"], line=dict(color="#ffd740", width=1.8), name="ADX"),
+        row=3, col=1
+    )
+    fig.add_hline(y=20, line_dash="dash", line_color="gray", line_width=1, row=3, col=1)
+    fig.update_yaxes(title_text="DMI / ADX", row=3, col=1)
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=720,
+        xaxis_rangeslider_visible=False,
+        margin=dict(t=40, b=20, l=40, r=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    st.plotly_chart(fig, use_container_width=True, key=f"chart_{label}")    
+    return df
 # --- REUSABLE 3-PANEL CHART BUILDER (PRICE + WILLIAMS %R + DMI/ADX) ---
 def render_indicator_chart(df: pd.DataFrame, label: str, num_candles: int = 80):
     if df.empty:
@@ -510,8 +588,32 @@ if selected_intervals:
         adx_val = c1["ADX"]
         st.markdown(f"- Trend Strength (ADX > 20): {'✅ Active' if c1_adx_ok else '⚠️ Choppy'} (`{adx_val:.1f}`)")
 
-    plot_df = df_5m.iloc[-80:]
+    st.divider()
+    st.subheader("📈 Multi-Timeframe Technical Charts (5m, 15m, 30m, 1h, 4h, 1d)")
 
+    # Fetch additional timeframes (5m, 30m, 1h are already loaded above)
+    df_15m = add_indicators(fetch_ohlcv(data_source, "15m", limit=300))
+    df_4h = add_indicators(fetch_ohlcv(data_source, "4h", limit=300))
+    df_1d = add_indicators(fetch_ohlcv(data_source, "1d", limit=300))
+
+    timeframes_to_plot = [
+        ("5-Minute Execution", df_5m),
+        ("15-Minute Intraday", df_15m),
+        ("30-Minute Intraday", df_30m),
+        ("1-Hour Macro", df_1h),
+        ("4-Hour Swing", df_4h),
+        ("1-Day Trend", df_1d),
+    ]
+
+    # Display in a clean 2-column grid (3 rows x 2 charts) so all 6 are visible at once
+    for i in range(0, len(timeframes_to_plot), 2):
+        c_left, c_right = st.columns(2)
+        with c_left:
+            label_l, df_l = timeframes_to_plot[i]
+            render_indicator_chart(df_l, label_l)
+        with c_right:
+            label_r, df_r = timeframes_to_plot[i + 1]
+            render_indicator_chart(df_r, label_r)
     fig = make_subplots(
         rows=3,
         cols=1,
@@ -644,3 +746,4 @@ with tab_guide:
     4. **Respect the "Wait" Discipline:** High-confluence setups occur selectively. Never short an oversold market (`Williams %R < -80` on 5m)—wait for a relief bounce into resistance first.
     5. **Daily Circuit Breaker:** Stop trading for the day if you hit **3 consecutive Stop-Losses**.
     """)
+
